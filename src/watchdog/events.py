@@ -99,6 +99,29 @@ EVENT_TYPE_CREATED = 'created'
 EVENT_TYPE_MODIFIED = 'modified'
 
 
+class ErrorEvent(object):
+    """
+    Represents an error that occurred while handling events.
+    """
+
+    def __init__(self, exception):
+        """
+        :param exception:
+            An instance of :class:`Exception`.
+        """
+        self.exception = exception
+
+    def __str__(self):
+        return "<ErrorEvent: %r>" % (str(self.exception),)
+
+    def __hash__(self):
+        """
+        Define a hash so this can be used in
+        :class:`~watchdog.observers.api.EventQueue`.
+        """
+        return hash(str(self.exception))
+
+
 class FileSystemEvent(object):
     """
     Immutable type that represents a file system event that is triggered
@@ -311,6 +334,12 @@ class FileSystemEventHandler(object):
     Base file system event handler that you can override methods from.
     """
 
+    ERROR_PASS = 0
+    """Return code for :meth:`on_error`, pass exception"""
+
+    ERROR_RESTART = 1
+    """Return code for :meth:`on_error`, restart emitter"""
+
     def dispatch(self, event):
         """Dispatches events to the appropriate methods.
 
@@ -319,15 +348,36 @@ class FileSystemEventHandler(object):
         :type event:
             :class:`FileSystemEvent`
         """
-        self.on_any_event(event)
-        _method_map = {
-            EVENT_TYPE_MODIFIED: self.on_modified,
-            EVENT_TYPE_MOVED: self.on_moved,
-            EVENT_TYPE_CREATED: self.on_created,
-            EVENT_TYPE_DELETED: self.on_deleted,
-        }
-        event_type = event.event_type
-        _method_map[event_type](event)
+        if isinstance(event, ErrorEvent):
+            return self.on_error(event.exception)
+        else:
+            self.on_any_event(event)
+            _method_map = {
+                EVENT_TYPE_MODIFIED: self.on_modified,
+                EVENT_TYPE_MOVED: self.on_moved,
+                EVENT_TYPE_CREATED: self.on_created,
+                EVENT_TYPE_DELETED: self.on_deleted,
+            }
+            event_type = event.event_type
+            _method_map[event_type](event)
+
+    def on_error(self, exception):
+        """
+        Called when an error occurred.
+
+        If it returns :data:`ERROR_PASS`, exception will be ignored an the
+        emitter will continue.
+        If it returns :data:`ERROR_RESTART`, the emitter will be restarted.
+        All other return values will be treated as :data:`ERROR_PASS`.
+
+        If it raises an Exception, the Observer will be stopped.
+
+        Defaults to raising the exception.
+
+        :param exception:
+            An instance of :class:`Exception`.
+        """
+        raise exception
 
     def on_any_event(self, event):
         """Catch-all event handler.
@@ -430,28 +480,31 @@ class PatternMatchingEventHandler(FileSystemEventHandler):
         :type event:
             :class:`FileSystemEvent`
         """
-        if self.ignore_directories and event.is_directory:
-            return
+        if isinstance(event, ErrorEvent):
+            return self.on_error(event.exception)
+        else:
+            if self.ignore_directories and event.is_directory:
+                return
 
-        paths = []
-        if has_attribute(event, 'dest_path'):
-            paths.append(unicode_paths.decode(event.dest_path))
-        if event.src_path:
-            paths.append(unicode_paths.decode(event.src_path))
+            paths = []
+            if has_attribute(event, 'dest_path'):
+                paths.append(unicode_paths.decode(event.dest_path))
+            if event.src_path:
+                paths.append(unicode_paths.decode(event.src_path))
 
-        if match_any_paths(paths,
-                           included_patterns=self.patterns,
-                           excluded_patterns=self.ignore_patterns,
-                           case_sensitive=self.case_sensitive):
-            self.on_any_event(event)
-            _method_map = {
-                EVENT_TYPE_MODIFIED: self.on_modified,
-                EVENT_TYPE_MOVED: self.on_moved,
-                EVENT_TYPE_CREATED: self.on_created,
-                EVENT_TYPE_DELETED: self.on_deleted,
-            }
-            event_type = event.event_type
-            _method_map[event_type](event)
+            if match_any_paths(paths,
+                               included_patterns=self.patterns,
+                               excluded_patterns=self.ignore_patterns,
+                               case_sensitive=self.case_sensitive):
+                self.on_any_event(event)
+                _method_map = {
+                    EVENT_TYPE_MODIFIED: self.on_modified,
+                    EVENT_TYPE_MOVED: self.on_moved,
+                    EVENT_TYPE_CREATED: self.on_created,
+                    EVENT_TYPE_DELETED: self.on_deleted,
+                }
+                event_type = event.event_type
+                _method_map[event_type](event)
 
 
 class RegexMatchingEventHandler(FileSystemEventHandler):
@@ -513,28 +566,31 @@ class RegexMatchingEventHandler(FileSystemEventHandler):
         :type event:
             :class:`FileSystemEvent`
         """
-        if self.ignore_directories and event.is_directory:
-            return
+        if isinstance(event, ErrorEvent):
+            return self.on_error(event.exception)
+        else:
+            if self.ignore_directories and event.is_directory:
+                return
 
-        paths = []
-        if has_attribute(event, 'dest_path'):
-            paths.append(unicode_paths.decode(event.dest_path))
-        if event.src_path:
-            paths.append(unicode_paths.decode(event.src_path))
+            paths = []
+            if has_attribute(event, 'dest_path'):
+                paths.append(unicode_paths.decode(event.dest_path))
+            if event.src_path:
+                paths.append(unicode_paths.decode(event.src_path))
 
-        if any(r.match(p) for r in self.ignore_regexes for p in paths):
-            return
+            if any(r.match(p) for r in self.ignore_regexes for p in paths):
+                return
 
-        if any(r.match(p) for r in self.regexes for p in paths):
-            self.on_any_event(event)
-            _method_map = {
-                EVENT_TYPE_MODIFIED: self.on_modified,
-                EVENT_TYPE_MOVED: self.on_moved,
-                EVENT_TYPE_CREATED: self.on_created,
-                EVENT_TYPE_DELETED: self.on_deleted,
-            }
-            event_type = event.event_type
-            _method_map[event_type](event)
+            if any(r.match(p) for r in self.regexes for p in paths):
+                self.on_any_event(event)
+                _method_map = {
+                    EVENT_TYPE_MODIFIED: self.on_modified,
+                    EVENT_TYPE_MOVED: self.on_moved,
+                    EVENT_TYPE_CREATED: self.on_created,
+                    EVENT_TYPE_DELETED: self.on_deleted,
+                }
+                event_type = event.event_type
+                _method_map[event_type](event)
 
 
 class LoggingEventHandler(FileSystemEventHandler):

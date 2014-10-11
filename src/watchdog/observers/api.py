@@ -279,19 +279,35 @@ class BaseObserver(EventDispatcher):
             An :class:`ObservedWatch` object instance representing
             a watch.
         """
+        watch = ObservedWatch(path, recursive)
         with self._lock:
-            watch = ObservedWatch(path, recursive)
-            self._add_handler_for_watch(event_handler, watch)
+            return self._schedule_watch(event_handler, watch)
 
-            # If we don't have an emitter for this watch already, create it.
-            if self._emitter_for_watch.get(watch) is None:
-                emitter = self._emitter_class(event_queue=self.event_queue,
-                                              watch=watch,
-                                              timeout=self.timeout)
-                self._add_emitter(emitter)
-                if self.is_alive():
-                    emitter.start()
-            self._watches.add(watch)
+    def _schedule_watch(self, event_handler, watch):
+        """
+        Like :meth:`schedule` but takes a :class:`ObservedWatch` instead.
+
+        :param event_handler:
+            An event handler instance that has appropriate event handling
+            methods which will be called by the observer in response to
+            file system events.
+        :param watch:
+            An instance of :class:`ObservedWatch`
+        :return:
+            An :class:`ObservedWatch` object instance representing
+            a watch.
+        """
+        self._add_handler_for_watch(event_handler, watch)
+
+        # If we don't have an emitter for this watch already, create it.
+        if self._emitter_for_watch.get(watch) is None:
+            emitter = self._emitter_class(event_queue=self.event_queue,
+                                          watch=watch,
+                                          timeout=self.timeout)
+            self._add_emitter(emitter)
+            if self.is_alive():
+                emitter.start()
+        self._watches.add(watch)
         return watch
 
     def add_handler_for_watch(self, event_handler, watch):
@@ -330,6 +346,12 @@ class BaseObserver(EventDispatcher):
         with self._lock:
             self._handlers[watch].remove(event_handler)
 
+    def _unschedule(self, watch):
+        emitter = self._emitter_for_watch[watch]
+        del self._handlers[watch]
+        self._remove_emitter(emitter)
+        self._watches.remove(watch)
+
     def unschedule(self, watch):
         """Unschedules a watch.
 
@@ -340,10 +362,7 @@ class BaseObserver(EventDispatcher):
             :class:`ObservedWatch`
         """
         with self._lock:
-            emitter = self._emitter_for_watch[watch]
-            del self._handlers[watch]
-            self._remove_emitter(emitter)
-            self._watches.remove(watch)
+            self._unschedule(watch)
 
     def unschedule_all(self):
         """Unschedules all watches and detaches all associated event
@@ -359,7 +378,14 @@ class BaseObserver(EventDispatcher):
     def _dispatch_event(self, event, watch):
         with self._lock:
             for handler in self._handlers[watch]:
-                handler.dispatch(event)
+                ret = handler.dispatch(event)
+                if ret == handler.ERROR_RESTART:
+                    # unschedule all handlers for the watch and then
+                    # schedule them again
+                    handlers = self._handlers[watch]
+                    self._unschedule(watch)
+                    for handler in handlers:
+                        self._schedule_watch(handler, watch)
 
     def dispatch_events(self, event_queue, timeout):
         event, watch = event_queue.get(block=True, timeout=timeout)
@@ -370,4 +396,8 @@ class BaseObserver(EventDispatcher):
             # lock properly here, because `event_queue.get` blocks whenever the
             # queue is empty.
             pass
+        except Exception:
+            self.stop()
+            raise
+
         event_queue.task_done()
