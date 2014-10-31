@@ -97,13 +97,16 @@ EVENT_TYPE_MOVED = 'moved'
 EVENT_TYPE_DELETED = 'deleted'
 EVENT_TYPE_CREATED = 'created'
 EVENT_TYPE_MODIFIED = 'modified'
+EVENT_TYPE_ERROR = 'error'
 
 
 class ErrorEvent(object):
     """
     Represents an error that occurred while handling events.
     """
-
+    
+    event_type = EVENT_TYPE_ERROR
+    
     def __init__(self, exception):
         """
         :param exception:
@@ -113,13 +116,26 @@ class ErrorEvent(object):
 
     def __str__(self):
         return "<ErrorEvent: %r>" % (str(self.exception),)
+        
+    # Used for comparison of events.
+    @property
+    def key(self):
+        return (self.event_type, str(self.exception), False)
+        
+    def __eq__(self, event):
+        return self.key == event.key
+
+    def __ne__(self, event):
+        return self.key != event.key
 
     def __hash__(self):
         """
         Define a hash so this can be used in
         :class:`~watchdog.observers.api.EventQueue`.
         """
-        return hash(str(self.exception))
+        return hash(self.key)
+        
+    
 
 
 class FileSystemEvent(object):
